@@ -1,0 +1,86 @@
+name: Kernel build - IPU investigation.
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+env:
+  ARCH: mips
+  CROSS_COMPILE: mipsel-linux-
+  TOOLCHAIN_URL: https://github.com/retrofw/kernel/releases/download/tools/mipseltools-gcc412-glibc261.tar.bz2
+  TOOLCHAIN_DIR: mipseltools-gcc412-glibc261
+  TOOLCHAIN_SHA256: cebe6d35d64cb5c8a021e99c99da81a81139068034b8c3920b4a79c95ee4fa03
+
+jobs:
+  build:
+    name: Configurating and building the Kernel Image.
+    runs-on: ubuntu-20.04
+    steps:
+    - name: Install Dependencies.
+      run: |
+        sudo dpkg --add-architecture i386
+        sudo apt update
+        sudo apt install -y \
+        build-essential \
+        gcc-multilib \
+        g++-multilib \
+        bzip2 \
+        curl \
+        git \
+        make \
+        gcc \
+        tar \
+        u-boot-tools \
+        libc6-dev:i386 \
+        libstdc++-10-dev:i386 \
+        python2
+
+    - name: Initialization of RAMDISK.
+      run: |
+        sudo mount -t tmpfs -o size=1024m,mode=1777 toolchain /opt
+        sudo mount -t tmpfs -o size=4096m,mode=1777 build $GITHUB_WORKSPACE
+      
+    - name: Cache Toolchain.
+      id: cache-toolchain
+      uses: actions/cache@v5.0.3
+      with:
+        path: /opt/${{ env.TOOLCHAIN_DIR }}
+        key: ${{ runner.os }}-toolchain-${{ env.TOOLCHAIN_SHA256 }}
+        restore-keys: |
+          ${{ runner.os }}-toolchain-
+
+    - name: Download & Extract Toolchain.
+      if: ${{ steps.cache-toolchain.outputs.cache-hit != 'true' }}
+      run: |
+        curl -SL -o /dev/shm/${{ env.TOOLCHAIN_DIR }}.tar.bz2 ${{ env.TOOLCHAIN_URL }}
+        cd / && tar -xjf /dev/shm/${{ env.TOOLCHAIN_DIR }}.tar.bz2
+        rm /dev/shm/${{ env.TOOLCHAIN_DIR }}.tar.bz2
+        
+    - name: Set Toolchain PATH & Verify.
+      run: |
+        echo "/opt/${{ env.TOOLCHAIN_DIR }}/bin" >> $GITHUB_PATH
+        export PATH="/opt/${{ env.TOOLCHAIN_DIR }}/bin:$PATH"
+        ${{ env.CROSS_COMPILE }}gcc --version 
+
+    - name: Checkout Repository.
+      uses: actions/checkout@6.0.2
+      with:
+        path: kernel
+
+    - name: Build Kernel.
+      run: |
+        cd $GITHUB_WORKSPACE/kernel && mkdir ../RetroFW_PK3P
+        make ARCH=${{ env.ARCH }} O=$GITHUB_WORKSPACE/RetroFW_PK3P RetroFW_defconfig
+        cd ../RetroFW_PK3P
+        make ARCH=${{ env.ARCH }} CROSS_COMPILE=${{ env.CROSS_COMPILE }} uImage 
+
+    - name: Upload Build Artifacts!
+      uses: actions/upload-artifact@v6.0.0
+      with:
+        name: retrofw-kernel-build
+        path: |
+          ${{ github.workspace }}/RetroFW_PK3P/arch/mips/boot/uImage
+          ${{ github.workspace }}/RetroFW_PK3P/arch/mips/boot/vmlinuz
+          ${{ github.workspace }}/RetroFW_PK3P/System.map
+        retention-days: 14
